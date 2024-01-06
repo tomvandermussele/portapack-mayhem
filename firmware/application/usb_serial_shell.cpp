@@ -41,6 +41,7 @@
 #include "chprintf.h"
 #include "chqueues.h"
 #include "untar.hpp"
+#include "ui_widget.hpp"
 
 #include <string>
 #include <codecvt>
@@ -365,6 +366,44 @@ static void cmd_touch(BaseSequentialStream* chp, int argc, char* argv[]) {
     chprintf(chp, "ok\r\n");
 }
 
+// send ascii keys in 2 char hex representation. Can send multiple keys at once like: keyboard 414243 (this will be ABC)
+static void cmd_keyboard(BaseSequentialStream* chp, int argc, char* argv[]) {
+    if (argc != 1) {
+        chprintf(chp, "usage: keyboard XX\r\n");
+        return;
+    }
+
+    auto evtd = getEventDispatcherInstance();
+    if (evtd == NULL) {
+        chprintf(chp, "error\r\n");
+    }
+
+    size_t data_string_len = strlen(argv[0]);
+    if (data_string_len % 2 != 0) {
+        chprintf(chp, "usage: keyboard XXXX\r\n");
+        return;
+    }
+
+    for (size_t i = 0; i < data_string_len; i++) {
+        char c = argv[0][i];
+        if ((c < '0' || c > '9') && (c < 'A' || c > 'F')) {
+            chprintf(chp, "usage: keyboard XX\r\n");
+            return;
+        }
+    }
+
+    char buffer[3] = {0, 0, 0};
+
+    for (size_t i = 0; i < data_string_len / 2; i++) {
+        buffer[0] = argv[0][i * 2];
+        buffer[1] = argv[0][i * 2 + 1];
+        uint8_t chr = (uint8_t)strtol(buffer, NULL, 16);
+        evtd->emulateKeyboard(chr);
+    }
+
+    chprintf(chp, "ok\r\n");
+}
+
 static void cmd_sd_list_dir(BaseSequentialStream* chp, int argc, char* argv[]) {
     if (argc != 1) {
         chprintf(chp, "usage: ls /\r\n");
@@ -545,6 +584,37 @@ static void cmd_sd_write(BaseSequentialStream* chp, int argc, char* argv[]) {
     chprintf(chp, "ok\r\n");
 }
 
+static void cmd_rtcget(BaseSequentialStream* chp, int argc, char* argv[]) {
+    (void)chp;
+    (void)argc;
+    (void)argv;
+
+    rtc::RTC datetime;
+    rtcGetTime(&RTCD1, &datetime);
+
+    chprintf(chp, "Current time: %04d-%02d-%02d %02d:%02d:%02d\r\n", datetime.year(), datetime.month(), datetime.day(), datetime.hour(), datetime.minute(), datetime.second());
+}
+
+static void cmd_rtcset(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage =
+        "usage: rtcset [year] [month] [day] [hour] [minute] [second]\r\n"
+        "  all fields are required; milliseconds zero when set\r\n"
+        "  (fractional seconds are not supported)\r\n";
+
+    if (argc != 6) {
+        chprintf(chp, usage);
+        return;
+    }
+
+    rtc::RTC new_datetime{
+        (uint16_t)strtol(argv[0], NULL, 10), (uint8_t)strtol(argv[1], NULL, 10),
+        (uint8_t)strtol(argv[2], NULL, 10), (uint32_t)strtol(argv[3], NULL, 10),
+        (uint32_t)strtol(argv[4], NULL, 10), (uint32_t)strtol(argv[5], NULL, 10)};
+    rtcSetTime(&RTCD1, &new_datetime);
+
+    chprintf(chp, "ok\r\n");
+}
+
 static void cpld_info(BaseSequentialStream* chp, int argc, char* argv[]) {
     const char* usage =
         "usage: cpld_info <device>\r\n"
@@ -690,6 +760,87 @@ static void cpld_info(BaseSequentialStream* chp, int argc, char* argv[]) {
     } else {
         chprintf(chp, usage);
     }
+}
+
+// walks throught the given widget's childs in recurse to get all support text and pass it to a callback function
+static void widget_collect_accessibility(BaseSequentialStream* chp, ui::Widget* w, void (*callback)(BaseSequentialStream*, const std::string&, const std::string&), ui::Widget* focusedWidget) {
+    for (auto child : w->children()) {
+        if (!child->hidden()) {
+            std::string res = "";
+            child->getAccessibilityText(res);
+            std::string strtype = "";
+            child->getWidgetName(strtype);
+            if (child == focusedWidget) strtype += "*";
+            if (callback != NULL && !res.empty()) callback(chp, res, strtype);
+            widget_collect_accessibility(chp, child, callback, focusedWidget);
+        }
+    }
+}
+
+// callback when it found any response from a widget
+static void accessibility_callback(BaseSequentialStream* chp, const std::string& strResult, const std::string& wgType) {
+    if (!wgType.empty()) {
+        chprintf(chp, "[");
+        chprintf(chp, wgType.c_str());
+        chprintf(chp, "] ");
+    }
+    chprintf(chp, "%s\r\n", strResult.c_str());
+}
+
+// gets all widget's accessibility helper text
+static void cmd_accessibility_readall(BaseSequentialStream* chp, int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+
+    auto evtd = getEventDispatcherInstance();
+    if (evtd == NULL) {
+        chprintf(chp, "error Can't get Event Dispatcherr\n");
+        return;
+    }
+    auto wg = evtd->getTopWidget();
+    if (wg == NULL) {
+        chprintf(chp, "error Can't get top Widget\r\n");
+        return;
+    }
+    auto focused = evtd->getFocusedWidget();
+    widget_collect_accessibility(chp, wg, accessibility_callback, focused);
+    chprintf(chp, "ok\r\n");
+}
+
+// gets focused widget's accessibility helper text
+static void cmd_accessibility_readcurr(BaseSequentialStream* chp, int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
+
+    auto evtd = getEventDispatcherInstance();
+    if (evtd == NULL) {
+        chprintf(chp, "error Can't get Event Dispatcher\r\n");
+        return;
+    }
+    auto wg = evtd->getFocusedWidget();
+    if (wg == NULL) {
+        chprintf(chp, "error Can't get focused Widget\r\n");
+        return;
+    }
+    std::string res = "";
+    wg->getAccessibilityText(res);
+    if (res.empty()) {
+        // try with parent
+        wg = wg->parent();
+        if (wg == NULL) {
+            chprintf(chp, "error Widget not providing accessibility info\r\n");
+            return;
+        }
+        wg->getAccessibilityText(res);
+        if (res.empty()) {
+            chprintf(chp, "error Widget not providing accessibility info\r\n");
+            return;
+        }
+    }
+    std::string strtype = "";
+    wg->getWidgetName(strtype);
+    accessibility_callback(chp, res, strtype);
+    chprintf(chp, "\r\nok\r\n");
 }
 
 static void cmd_cpld_read(BaseSequentialStream* chp, int argc, char* argv[]) {
@@ -866,6 +1017,7 @@ static const ShellCommand commands[] = {
     {"read_memory", cmd_read_memory},
     {"button", cmd_button},
     {"touch", cmd_touch},
+    {"keyboard", cmd_keyboard},
     {"ls", cmd_sd_list_dir},
     {"rm", cmd_sd_delete},
     {"open", cmd_sd_open},
@@ -874,8 +1026,12 @@ static const ShellCommand commands[] = {
     {"read", cmd_sd_read},
     {"write", cmd_sd_write},
     {"filesize", cmd_sd_filesize},
+    {"rtcget", cmd_rtcget},
+    {"rtcset", cmd_rtcset},
     {"cpld_info", cpld_info},
     {"cpld_read", cmd_cpld_read},
+    {"accessibility_readall", cmd_accessibility_readall},
+    {"accessibility_readcurr", cmd_accessibility_readcurr},
     {NULL, NULL}};
 
 static const ShellConfig shell_cfg1 = {

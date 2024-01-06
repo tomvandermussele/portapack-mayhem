@@ -172,6 +172,10 @@ bool Widget::on_touch(const TouchEvent event) {
     (void)event;
     return false;
 }
+bool Widget::on_keyboard(const KeyboardEvent event) {
+    (void)event;
+    return false;
+}
 
 const std::vector<Widget*>& Widget::children() const {
     return no_children;
@@ -233,6 +237,12 @@ void Widget::dirty_overlapping_children_in_rect(const Rect& child_rect) {
     }
 }
 
+void Widget::getAccessibilityText(std::string& result) {
+    result = "";
+}
+void Widget::getWidgetName(std::string& result) {
+    result = "";
+}
 /* View ******************************************************************/
 
 void View::paint(Painter& painter) {
@@ -363,6 +373,12 @@ void Text::set(std::string_view value) {
     set_dirty();
 }
 
+void Text::getAccessibilityText(std::string& result) {
+    result = text;
+}
+void Text::getWidgetName(std::string& result) {
+    result = "Text";
+}
 void Text::paint(Painter& painter) {
     const auto rect = screen_rect();
     auto s = has_focus() ? style().invert() : style();
@@ -401,6 +417,17 @@ void Labels::paint(Painter& painter) {
             style().background,
             label.text);
     }
+}
+
+void Labels::getAccessibilityText(std::string& result) {
+    result = "";
+    for (auto& label : labels_) {
+        result += label.text;
+        result += ", ";
+    }
+}
+void Labels::getWidgetName(std::string& result) {
+    result = "Labels";
 }
 
 /* LiveDateTime **********************************************************/
@@ -575,6 +602,13 @@ void ProgressBar::set_value(const uint32_t value) {
     set_dirty();
 }
 
+void ProgressBar::getAccessibilityText(std::string& result) {
+    result = to_string_dec_uint(_value) + " / " + to_string_dec_uint(_max);
+}
+void ProgressBar::getWidgetName(std::string& result) {
+    result = "ProgressBar";
+}
+
 void ProgressBar::paint(Painter& painter) {
     int v_scaled;
 
@@ -673,6 +707,13 @@ void Console::write(std::string message) {
     } else {
         if (buffer.size() < 256) buffer += message;
     }
+}
+
+void Console::getAccessibilityText(std::string& result) {
+    result = "{" + buffer + "}";
+}
+void Console::getWidgetName(std::string& result) {
+    result = "Console";
 }
 
 void Console::writeln(std::string message) {
@@ -783,6 +824,13 @@ bool Checkbox::set_value(const bool value) {
     return false;
 }
 
+void Checkbox::getAccessibilityText(std::string& result) {
+    result = text_ + ((value_) ? " checked" : " unchecked");
+}
+void Checkbox::getWidgetName(std::string& result) {
+    result = "Checkbox";
+}
+
 bool Checkbox::value() const {
     return value_;
 }
@@ -853,6 +901,11 @@ bool Checkbox::on_key(const KeyEvent key) {
     return false;
 }
 
+bool Checkbox::on_keyboard(const KeyboardEvent event) {
+    if (event == 10 || event == 32) return set_value(not value_);
+    return false;
+}
+
 bool Checkbox::on_touch(const TouchEvent event) {
     switch (event.type) {
         case TouchEvent::Type::Start:
@@ -893,6 +946,13 @@ void Button::set_text(const std::string value) {
 
 std::string Button::text() const {
     return text_;
+}
+
+void Button::getAccessibilityText(std::string& result) {
+    result = text_;
+}
+void Button::getWidgetName(std::string& result) {
+    result = "Button";
 }
 
 void Button::paint(Painter& painter) {
@@ -941,6 +1001,16 @@ bool Button::on_key(const KeyEvent key) {
         }
     }
 
+    return false;
+}
+
+bool Button::on_keyboard(const KeyboardEvent event) {
+    if (event == 10 || event == 32) {
+        if (on_select) {
+            on_select(*this);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1031,6 +1101,13 @@ std::string ButtonWithEncoder::text() const {
     return text_;
 }
 
+void ButtonWithEncoder::getAccessibilityText(std::string& result) {
+    result = text_;
+}
+void ButtonWithEncoder::getWidgetName(std::string& result) {
+    result = "ButtonWithEncoder";
+}
+
 void ButtonWithEncoder::paint(Painter& painter) {
     Color bg, fg;
     const auto r = screen_rect();
@@ -1077,6 +1154,16 @@ bool ButtonWithEncoder::on_key(const KeyEvent key) {
         }
     }
 
+    return false;
+}
+
+bool ButtonWithEncoder::on_keyboard(const KeyboardEvent key) {
+    if (key == 32 || key == 10) {
+        if (on_select) {
+            on_select(*this);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1174,6 +1261,13 @@ NewButton::NewButton(
 void NewButton::set_text(const std::string value) {
     text_ = value;
     set_dirty();
+}
+
+void NewButton::getAccessibilityText(std::string& result) {
+    result = text_;
+}
+void NewButton::getWidgetName(std::string& result) {
+    result = "NewButton";
 }
 
 std::string NewButton::text() const {
@@ -1274,6 +1368,16 @@ bool NewButton::on_key(const KeyEvent key) {
     return false;
 }
 
+bool NewButton::on_keyboard(const KeyboardEvent key) {
+    if (key == 32 || key == 10) {
+        if (on_select) {
+            on_select();
+            return true;
+        }
+    }
+    return false;
+}
+
 bool NewButton::on_touch(const TouchEvent event) {
     switch (event.type) {
         case TouchEvent::Type::Start:
@@ -1360,6 +1464,13 @@ ImageButton::ImageButton(
     set_focusable(true);
 }
 
+void ImageButton::getAccessibilityText(std::string& result) {
+    result = "image";
+}
+void ImageButton::getWidgetName(std::string& result) {
+    result = "ImageButton";
+}
+
 bool ImageButton::on_key(const KeyEvent key) {
     if (key == KeyEvent::Select) {
         if (on_select) {
@@ -1368,6 +1479,16 @@ bool ImageButton::on_key(const KeyEvent key) {
         }
     }
 
+    return false;
+}
+
+bool ImageButton::on_keyboard(const KeyboardEvent key) {
+    if (key == 32 || key == 10) {
+        if (on_select) {
+            on_select(*this);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -1440,6 +1561,13 @@ bool ImageToggle::value() const {
     return value_;
 }
 
+void ImageToggle::getAccessibilityText(std::string& result) {
+    result = value_ ? "checked" : "unchecked";
+}
+void ImageToggle::getWidgetName(std::string& result) {
+    result = "ImageToggle";
+}
+
 void ImageToggle::set_value(bool b) {
     if (b == value_)
         return;
@@ -1473,6 +1601,13 @@ size_t ImageOptionsField::selected_index() const {
 
 size_t ImageOptionsField::selected_index_value() const {
     return options[selected_index_].second;
+}
+
+void ImageOptionsField::getAccessibilityText(std::string& result) {
+    result = "selected index: " + to_string_dec_uint(selected_index_);
+}
+void ImageOptionsField::getWidgetName(std::string& result) {
+    result = "ImageOptionsField";
 }
 
 void ImageOptionsField::set_selected_index(const size_t new_index) {
@@ -1537,6 +1672,12 @@ bool ImageOptionsField::on_encoder(const EncoderEvent delta) {
     return true;
 }
 
+bool ImageOptionsField::on_keyboard(const KeyboardEvent key) {
+    if (key == '+' || key == ' ' || key == 10) return on_encoder(1);
+    if (key == '-' || key == 8) return on_encoder(-1);
+    return false;
+}
+
 bool ImageOptionsField::on_touch(const TouchEvent event) {
     if (event.type == TouchEvent::Type::Start) {
         focus();
@@ -1566,6 +1707,20 @@ const OptionsField::name_t& OptionsField::selected_index_name() const {
 
 const OptionsField::value_t& OptionsField::selected_index_value() const {
     return options_[selected_index_].second;
+}
+
+void OptionsField::getAccessibilityText(std::string& result) {
+    result = "options: ";
+    bool first = true;
+    for (const auto& option : options_) {
+        if (!first) result += " ,";
+        first = false;
+        result += option.first;
+    }
+    result += "; selected: " + selected_index_name();
+}
+void OptionsField::getWidgetName(std::string& result) {
+    result = "OptionsField";
 }
 
 void OptionsField::set_selected_index(const size_t new_index, bool trigger_change) {
@@ -1653,6 +1808,11 @@ bool OptionsField::on_encoder(const EncoderEvent delta) {
     set_selected_index(new_value);
     return true;
 }
+bool OptionsField::on_keyboard(const KeyboardEvent key) {
+    if (key == '+' || key == ' ' || key == 10) return on_encoder(1);
+    if (key == '-' || key == 8) return on_encoder(-1);
+    return false;
+}
 
 bool OptionsField::on_touch(const TouchEvent event) {
     if (event.type == TouchEvent::Type::Start) {
@@ -1679,6 +1839,13 @@ TextEdit::TextEdit(
 
 const std::string& TextEdit::value() const {
     return text_;
+}
+
+void TextEdit::getAccessibilityText(std::string& result) {
+    result = text_;
+}
+void TextEdit::getWidgetName(std::string& result) {
+    result = "TextEdit";
 }
 
 void TextEdit::set_cursor(uint32_t pos) {
@@ -1772,6 +1939,19 @@ bool TextEdit::on_key(const KeyEvent key) {
     return true;
 }
 
+bool TextEdit::on_keyboard(const KeyboardEvent key) {
+    // if ascii printable
+    if (key >= 0x20 && key <= 0x7e) {
+        char_add(key);
+        return true;
+    }
+    if (key == 8) {
+        char_delete();
+        return true;
+    }
+    return false;
+}
+
 bool TextEdit::on_encoder(const EncoderEvent delta) {
     int32_t new_pos = cursor_pos_ + delta;
 
@@ -1815,6 +1995,13 @@ TextField::TextField(Rect parent_rect, std::string text)
 
 const std::string& TextField::get_text() const {
     return text;
+}
+
+void TextField::getAccessibilityText(std::string& result) {
+    result = text;
+}
+void TextField::getWidgetName(std::string& result) {
+    result = "TextField";
 }
 
 void TextField::set_text(std::string_view value) {
@@ -1872,6 +2059,13 @@ int32_t NumberField::value() const {
     return value_;
 }
 
+void NumberField::getAccessibilityText(std::string& result) {
+    result = to_string_dec_int(value_);
+}
+void NumberField::getWidgetName(std::string& result) {
+    result = "NumberField";
+}
+
 void NumberField::set_value(int32_t new_value, bool trigger_change) {
     if (can_loop) {
         if (new_value >= range.first)
@@ -1926,6 +2120,22 @@ bool NumberField::on_key(const KeyEvent key) {
 bool NumberField::on_encoder(const EncoderEvent delta) {
     set_value(value() + (delta * step));
     return true;
+}
+
+bool NumberField::on_keyboard(const KeyboardEvent key) {
+    if (key == 10) {
+        if (on_select) {
+            on_select(*this);
+            return true;
+        }
+    }
+    if (key == '+' || key == ' ') {
+        return on_encoder(1);
+    }
+    if (key == '-' || key == 8) {
+        return on_encoder(-1);
+    }
+    return false;
 }
 
 bool NumberField::on_touch(const TouchEvent event) {
@@ -2066,6 +2276,12 @@ const std::string& SymField::to_string() const {
     return value_;
 }
 
+void SymField::getAccessibilityText(std::string& result) {
+    result = value_;
+}
+void SymField::getWidgetName(std::string& result) {
+    result = "SymField";
+}
 void SymField::paint(Painter& painter) {
     Point p = screen_pos();
 

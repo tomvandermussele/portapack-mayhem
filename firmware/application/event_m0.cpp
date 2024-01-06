@@ -242,6 +242,18 @@ void EventDispatcher::emulateTouch(ui::TouchEvent event) {
     on_touch_event(event);
 }
 
+void EventDispatcher::emulateKeyboard(ui::KeyboardEvent event) {
+    on_keyboard_event(event);
+}
+
+void EventDispatcher::on_keyboard_event(ui::KeyboardEvent event) {
+    // send the key to focused widget, or parent if not accepts it
+    auto target = context.focus_manager().focus_widget();
+    while ((target != nullptr) && !target->on_keyboard(event)) {
+        target = target->parent();
+    }
+}
+
 void EventDispatcher::on_touch_event(ui::TouchEvent event) {
     /* TODO: Capture widget receiving the Start event, send Move and
      * End events to the same widget.
@@ -260,6 +272,14 @@ void EventDispatcher::on_touch_event(ui::TouchEvent event) {
     if (captured_widget) {
         captured_widget->on_touch(event);
     }
+}
+
+ui::Widget* EventDispatcher::getTopWidget() {
+    return top_widget;
+}
+
+ui::Widget* EventDispatcher::getFocusedWidget() {
+    return context.focus_manager().focus_widget();
 }
 
 void EventDispatcher::handle_lcd_frame_sync() {
