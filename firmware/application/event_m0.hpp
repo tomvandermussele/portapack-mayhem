@@ -45,6 +45,7 @@ constexpr auto EVT_MASK_ENCODER = EVENT_MASK(4);
 constexpr auto EVT_MASK_TOUCH = EVENT_MASK(5);
 constexpr auto EVT_MASK_APPLICATION = EVENT_MASK(6);
 constexpr auto EVT_MASK_LOCAL = EVENT_MASK(7);
+constexpr auto EVT_MASK_USB = EVENT_MASK(8);
 
 class EventDispatcher {
    public:
@@ -89,6 +90,10 @@ class EventDispatcher {
     void emulateTouch(ui::TouchEvent event);
     void emulateKeyboard(ui::KeyboardEvent event);
 
+    void wait_finish_frame();
+    void enter_shell_working_mode();
+    void exit_shell_working_mode();
+
     ui::Widget* getTopWidget();
     ui::Widget* getFocusedWidget();
 
@@ -104,6 +109,11 @@ class EventDispatcher {
     bool sd_card_present = false;
     static bool display_sleep;
     bool in_key_event = false;
+    volatile bool waiting_for_frame = false;
+    volatile bool waiting_for_shellmode = false;
+    volatile bool shellmode_active = false;
+    ui::TouchEvent* volatile injected_touch_event = nullptr;
+    ui::KeyboardEvent* volatile injected_keyboard_event = nullptr;
 
     eventmask_t wait();
     void dispatch(const eventmask_t events);
@@ -111,6 +121,8 @@ class EventDispatcher {
     void handle_application_queue();
     void handle_local_queue();
     void handle_rtc_tick();
+    void handle_usb();
+    void handle_shell();
 
     static ui::Widget* touch_widget(ui::Widget* const w, ui::TouchEvent event);
 
