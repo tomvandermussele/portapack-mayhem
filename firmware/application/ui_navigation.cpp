@@ -146,7 +146,7 @@ std::vector<AppInfoConsole> NavigationView::fixedAppListFC = {
     {"lookingglass", "Looking Glass", RX}};
 
 bool NavigationView::StartAppByName(const char* name) {
-    pop();
+    home(false);
     if (strcmp(name, "adsbrx") == 0) {
         push<ADSBRxView>();
         return true;
@@ -570,7 +570,7 @@ void SystemStatusView::rtc_battery_workaround() {
                 }
             }
         } else {
-            make_new_directory(SETTINGS_DIR);
+            ensure_directory(SETTINGS_DIR);
             make_new_file(DATE_FILEFLAG);
 
             year = 1980;
@@ -658,6 +658,14 @@ void NavigationView::pop(bool trigger_update) {
     // these callbacks or it will cause crashes.
     if (trigger_update) update_view();
     if (on_pop) on_pop();
+}
+
+void NavigationView::home(bool trigger_update) {
+    while (view_stack.size() > 1) {
+        pop(false);
+    }
+
+    if (trigger_update) update_view();
 }
 
 void NavigationView::display_modal(

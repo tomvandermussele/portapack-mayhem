@@ -35,6 +35,7 @@ set(LZ4 lz4)
 
 set(FIRMWARE_NAME portapack-h1_h2-mayhem)
 set(FIRMWARE_FILENAME ${FIRMWARE_NAME}.bin)
+set(PPFW_FILENAME "portapack-mayhem_OCI.ppfw.tar")
 
 # In our current build container cmake need a little help to get the version :)
 if(NOT DEFINED ${CMAKE_CXX_COMPILER_VERSION})
@@ -100,7 +101,7 @@ add_custom_command(
 	COMMAND mkdir -p firmware_tar/APPS
 	COMMAND cp application/*.ppma firmware_tar/APPS
 	COMMAND cd firmware_tar && tar -cvaf ../${PPFW_FILENAME} *
-	DEPENDS firmware
+	DEPENDS firmware ${FIRMWARE_FILENAME}
 	# Dont use VERBATIM here as it prevents usage of globbing (*)
 	# There shouldnt be any funny business in the filenames above :)
 )

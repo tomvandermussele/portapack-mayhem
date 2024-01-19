@@ -145,7 +145,7 @@ struct misc_config_t {
     bool disable_speaker : 1;
     bool config_disable_external_tcxo : 1;
     bool config_sdcard_high_speed_io : 1;
-    bool UNUSED_4 : 1;
+    bool config_disable_config_mode : 1;
     bool UNUSED_5 : 1;
     bool UNUSED_6 : 1;
     bool UNUSED_7 : 1;
@@ -155,6 +155,8 @@ struct misc_config_t {
     uint8_t PLACEHOLDER_3;
 };
 static_assert(sizeof(misc_config_t) == sizeof(uint32_t));
+
+#define MC_CONFIG_DISABLE_CONFIG_MODE 0x00000010  // config_disable_config_mode bit in struct above
 
 /* IMPORTANT: Update dump_persistent_memory (below) when changing data_t. */
 
@@ -386,6 +388,7 @@ namespace cache {
 void defaults() {
     cached_backup_ram = backup_ram_t();
 
+    // If the desired default is 0/false, then no need to set it here (buffer is initialized to 0)
     set_config_backlight_timer(backlight_config_t{});
     set_config_splash(true);
     set_config_disable_external_tcxo(false);
@@ -416,8 +419,9 @@ void init() {
     const auto switches_state = get_switches_state();
 
     // ignore for valid check
-    auto config_mode_backup = config_mode_storage();
-    set_config_mode_storage(CONFIG_MODE_NORMAL_VALUE);
+    auto config_mode_backup = config_mode_storage_direct();
+    set_config_mode_storage_direct(CONFIG_MODE_NORMAL_VALUE);
+
     if (!(switches_state[(size_t)ui::KeyEvent::Left] && switches_state[(size_t)ui::KeyEvent::Right]) && backup_ram->is_valid()) {
         // Copy valid persistent data into cache.
         cached_backup_ram = *backup_ram;
@@ -433,7 +437,7 @@ void init() {
         // Copy defaults into cache.
         defaults();
     }
-    set_config_mode_storage(config_mode_backup);
+    set_config_mode_storage_direct(config_mode_backup);
 }
 
 void persist() {
@@ -597,6 +601,10 @@ bool config_disable_external_tcxo() {
     return data->misc_config.config_disable_external_tcxo;
 }
 
+bool config_disable_config_mode() {
+    return data->misc_config.config_disable_config_mode;
+}
+
 bool config_sdcard_high_speed_io() {
     return data->misc_config.config_sdcard_high_speed_io;
 }
@@ -664,6 +672,10 @@ void set_config_speaker_disable(bool v) {
 
 void set_config_disable_external_tcxo(bool v) {
     data->misc_config.config_disable_external_tcxo = v;
+}
+
+void set_config_disable_config_mode(bool v) {
+    data->misc_config.config_disable_config_mode = v;
 }
 
 void set_config_sdcard_high_speed_io(bool v, bool save) {
@@ -947,11 +959,17 @@ void set_encoder_dial_sensitivity(uint8_t v) {
 // Recovery mode magic value storage
 static data_t* data_direct_access = reinterpret_cast<data_t*>(memory::map::backup_ram.base());
 
-uint32_t config_mode_storage() {
+uint32_t config_mode_storage_direct() {
     return data_direct_access->config_mode_storage;
 }
-void set_config_mode_storage(uint32_t v) {
+void set_config_mode_storage_direct(uint32_t v) {
     data_direct_access->config_mode_storage = v;
+}
+bool config_disable_config_mode_direct() {
+    // "return data_direct_access->misc_config.config_disable_config_mode"
+    // Casting as U32 as workaround for misaligned memory access
+    uint32_t misc_config_u32 = *(uint32_t*)&data_direct_access->misc_config;
+    return ((misc_config_u32 & MC_CONFIG_DISABLE_CONFIG_MODE) != 0);
 }
 
 // PMem to sdcard settings
@@ -963,7 +981,7 @@ bool should_use_sdcard_for_pmem() {
 int save_persistent_settings_to_file() {
     File outfile;
 
-    make_new_directory(SETTINGS_DIR);
+    ensure_directory(SETTINGS_DIR);
     auto error = outfile.create(PMEM_SETTING_FILE);
     if (error)
         return false;
@@ -996,7 +1014,7 @@ bool debug_dump() {
     std::filesystem::path filename{};
     File pmem_dump_file{};
     // create new dump file name and DEBUG directory
-    make_new_directory(debug_dir);
+    ensure_directory(debug_dir);
     filename = next_filename_matching_pattern(debug_dir + "/DEBUG_DUMP_????.TXT");
     if (filename.empty()) {
         painter.draw_string({0, 320 - 16}, ui::Styles::red, "COULD NOT GET DUMP NAME !");
@@ -1037,9 +1055,9 @@ bool debug_dump() {
     pmem_dump_file.write_line("tone_mix: " + to_string_dec_uint(data->tone_mix));
     pmem_dump_file.write_line("hardware_config: " + to_string_dec_uint(data->hardware_config));
     pmem_dump_file.write_line("recon_config: 0x" + to_string_hex(data->recon_config, 16));
-    pmem_dump_file.write_line("recon_repeat_nb: " + to_string_dec_int(data->recon_repeat_nb, 16));
-    pmem_dump_file.write_line("recon_repeat_gain:" + to_string_hex(data->recon_config, 16));
-    pmem_dump_file.write_line("recon_repeat_delay:" + to_string_hex(data->recon_config, 16));
+    pmem_dump_file.write_line("recon_repeat_nb: " + to_string_dec_int(data->recon_repeat_nb));
+    pmem_dump_file.write_line("recon_repeat_gain: " + to_string_dec_int(data->recon_repeat_gain));
+    pmem_dump_file.write_line("recon_repeat_delay: " + to_string_dec_int(data->recon_repeat_delay));
     pmem_dump_file.write_line("converter: " + to_string_dec_int(data->converter));
     pmem_dump_file.write_line("updown_converter: " + to_string_dec_int(data->updown_converter));
     pmem_dump_file.write_line("updown_frequency_rx_correction: " + to_string_dec_int(data->updown_frequency_rx_correction));
@@ -1054,6 +1072,7 @@ bool debug_dump() {
     pmem_dump_file.write_line("encoder_dial_sensitivity: " + to_string_dec_uint(data->encoder_dial_sensitivity));
     // pmem_dump_file.write_line("UNUSED_8: " + to_string_dec_uint(data->UNUSED_8));
     pmem_dump_file.write_line("headphone_volume_cb: " + to_string_dec_int(data->headphone_volume_cb));
+    pmem_dump_file.write_line("config_mode_storage: 0x" + to_string_hex(data->config_mode_storage, 8));
 
     // ui_config bits
     const auto backlight_timer = portapack::persistent_memory::config_backlight_timer();
@@ -1086,8 +1105,9 @@ bool debug_dump() {
     // misc_config bits
     pmem_dump_file.write_line("misc_config config_audio_mute: " + to_string_dec_int(config_audio_mute()));
     pmem_dump_file.write_line("misc_config config_speaker_disable: " + to_string_dec_int(config_speaker_disable()));
-    pmem_dump_file.write_line("ui_config config_disable_external_tcxo: " + to_string_dec_uint(config_disable_external_tcxo()));
-    pmem_dump_file.write_line("ui_config config_sdcard_high_speed_io: " + to_string_dec_uint(config_sdcard_high_speed_io()));
+    pmem_dump_file.write_line("misc_config config_disable_external_tcxo: " + to_string_dec_uint(config_disable_external_tcxo()));
+    pmem_dump_file.write_line("misc_config config_sdcard_high_speed_io: " + to_string_dec_uint(config_sdcard_high_speed_io()));
+    pmem_dump_file.write_line("misc_config config_disable_config_mode: " + to_string_dec_uint(config_disable_config_mode()));
 
     // receiver_model
     pmem_dump_file.write_line("\n[Receiver Model]");

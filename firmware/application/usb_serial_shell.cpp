@@ -35,8 +35,9 @@
 #include "portapack_cpld_data.hpp"
 #include "crc.hpp"
 #include "hackrf_cpld_data.hpp"
+#include "performance_counter.hpp"
 
-#include "usb_serial_io.h"
+#include "usb_serial_device_to_host.h"
 #include "chprintf.h"
 #include "chqueues.h"
 #include "ui_external_items_menu_loader.hpp"
@@ -45,6 +46,8 @@
 
 #include "ui_navigation.hpp"
 #include "usb_serial_shell_filesystem.hpp"
+
+#include "portapack_persistent_memory.hpp"
 
 #include <string>
 #include <cstring>
@@ -142,6 +145,13 @@ static void cmd_flash(BaseSequentialStream* chp, int argc, char* argv[]) {
         return;
     }
 
+    auto evtd = getEventDispatcherInstance();
+    if (!evtd) return;
+    auto top_widget = evtd->getTopWidget();
+    if (!top_widget) return;
+    auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
+    if (!nav) return;
+    nav->display_modal("Flashing", "Flashing from serial.\r\nPlease wait!\r\nDevice will restart.");
     // check file extensions
     if (strEndsWith(path.native(), u".ppfw.tar")) {
         // extract tar
@@ -153,6 +163,7 @@ static void cmd_flash(BaseSequentialStream* chp, int argc, char* argv[]) {
             });
         if (res.empty()) {
             chprintf(chp, "error bad TAR file.\r\n");
+            nav->pop();
             return;
         }
         path = res;  // it will contain the last bin file in tar
@@ -160,8 +171,10 @@ static void cmd_flash(BaseSequentialStream* chp, int argc, char* argv[]) {
         // nothing to do for this case yet.
     } else {
         chprintf(chp, "error only .bin or .ppfw.tar files canbe flashed.\r\n");
+        nav->pop();
         return;
     }
+
     chprintf(chp, "Flashing: ");
     chprintf(chp, path.string().c_str());
     chprintf(chp, "\r\n");
@@ -877,6 +890,132 @@ static void cmd_cpld_read(BaseSequentialStream* chp, int argc, char* argv[]) {
     }
 }
 
+static void cmd_gotgps(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage = "usage: gotgps <lat> <lon> [altitude] [speed]\r\n";
+    if (argc < 2 || argc > 4) {
+        chprintf(chp, usage);
+        return;
+    }
+    float lat = atof(argv[0]);
+    float lon = atof(argv[1]);
+    int32_t altitude = 0;
+    int32_t speed = 0;
+    if (argc >= 3) altitude = strtol(argv[2], NULL, 10);
+    if (argc >= 4) speed = strtol(argv[3], NULL, 10);
+    GPSPosDataMessage msg{lat, lon, altitude, speed};
+    EventDispatcher::send_message(msg);
+    chprintf(chp, "ok\r\n");
+}
+
+static void cmd_gotorientation(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage = "usage: gotorientation <angle>\r\n";
+    if (argc != 1) {
+        chprintf(chp, usage);
+        return;
+    }
+    uint16_t angle = strtol(argv[0], NULL, 10);
+    OrientationDataMessage msg{angle};
+    EventDispatcher::send_message(msg);
+    chprintf(chp, "ok\r\n");
+}
+
+static void cmd_sysinfo(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage = "usage: sysinfo\r\n";
+    (void)argv;
+    if (argc > 0) {
+        chprintf(chp, usage);
+        return;
+    }
+    auto utilisation = get_cpu_utilisation_in_percent();
+    std::string info =
+        "M0 heap: " + to_string_dec_uint(chCoreStatus()) + "\r\n" +
+        "M0 stack: " + to_string_dec_uint((uint32_t)get_free_stack_space()) + "\r\n" +
+        "M0 cpu%: " + to_string_dec_uint(utilisation) + "\r\n" +
+        "M4 heap: " + to_string_dec_uint(shared_memory.m4_heap_usage) + "\r\n" +
+        "M4 stack: " + to_string_dec_uint(shared_memory.m4_stack_usage) + "\r\n" +
+        "M0 cpu%: " + to_string_dec_uint(shared_memory.m4_performance_counter) + "\r\n" +
+        "M4 miss: " + to_string_dec_uint(shared_memory.m4_buffer_missed) + "\r\n" +
+        "uptime: " + to_string_dec_uint(chTimeNow() / 1000) + "\r\n";
+
+    fillOBuffer(&((SerialUSBDriver*)chp)->oqueue, (const uint8_t*)info.c_str(), info.length());
+    return;
+}
+
+static void cmd_radioinfo(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage = "usage: radioinfo\r\n";
+    (void)argv;
+    if (argc > 0) {
+        chprintf(chp, usage);
+        return;
+    }
+    std::string info =
+        "receiver_model.target_frequency: " + to_string_dec_uint(portapack::receiver_model.target_frequency()) + "\r\n" +
+        "receiver_model.baseband_bandwidth: " + to_string_dec_uint(portapack::receiver_model.baseband_bandwidth()) + "\r\n" +
+        "receiver_model.sampling_rate: " + to_string_dec_uint(portapack::receiver_model.sampling_rate()) + "\r\n" +
+        "receiver_model.modulation: " + to_string_dec_uint((uint32_t)portapack::receiver_model.modulation()) + "\r\n" +
+        "receiver_model.am_configuration: " + to_string_dec_uint(portapack::receiver_model.am_configuration()) + "\r\n" +
+        "receiver_model.nbfm_configuration: " + to_string_dec_uint(portapack::receiver_model.nbfm_configuration()) + "\r\n" +
+        "receiver_model.wfm_configuration: " + to_string_dec_uint(portapack::receiver_model.wfm_configuration()) + "\r\n" +
+        "transmitter_model.target_frequency: " + to_string_dec_uint(portapack::transmitter_model.target_frequency()) + "\r\n" +
+        "transmitter_model.baseband_bandwidth: " + to_string_dec_uint(portapack::transmitter_model.baseband_bandwidth()) + "\r\n" +
+        "transmitter_model.sampling_rate: " + to_string_dec_uint(portapack::transmitter_model.sampling_rate()) + "\r\n";
+
+    fillOBuffer(&((SerialUSBDriver*)chp)->oqueue, (const uint8_t*)info.c_str(), info.length());
+    return;
+}
+
+static void cmd_pmemreset(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage = "usage: pmemreset yes\r\nThis will reset pmem to defaults!\r\n";
+    (void)argv;
+    if (argc != 1 || strcmp(argv[0], "yes") != 0) {
+        chprintf(chp, usage);
+        return;
+    }
+    auto evtd = getEventDispatcherInstance();
+    if (!evtd) return;
+    auto top_widget = evtd->getTopWidget();
+    if (!top_widget) return;
+    auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
+    if (!nav) return;
+    nav->home(true);
+
+    portapack::persistent_memory::cache::defaults();
+    // system refresh
+    StatusRefreshMessage message{};
+    EventDispatcher::send_message(message);
+    chprintf(chp, "ok\r\n");
+}
+
+static void cmd_settingsreset(BaseSequentialStream* chp, int argc, char* argv[]) {
+    const char* usage = "usage: settingsreset yes\r\nThis will reset all app settings to defaults!\r\n";
+    (void)argv;
+    if (argc != 1 || strcmp(argv[0], "yes") != 0) {
+        chprintf(chp, usage);
+        return;
+    }
+    auto evtd = getEventDispatcherInstance();
+    if (!evtd) return;
+    auto top_widget = evtd->getTopWidget();
+    if (!top_widget) return;
+    auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
+    if (!nav) return;
+    nav->home(true);  // to exit all running apps
+
+    for (const auto& entry : std::filesystem::directory_iterator(SETTINGS_DIR, u"*.ini")) {
+        if (std::filesystem::is_regular_file(entry.status())) {
+            std::filesystem::path pth = SETTINGS_DIR;
+            pth += u"/" + entry.path();
+            chprintf(chp, pth.string().c_str());
+            chprintf(chp, "\r\n");
+            f_unlink(pth.tchar());
+        }
+    }
+    // system refresh
+    StatusRefreshMessage message{};
+    EventDispatcher::send_message(message);
+    chprintf(chp, "ok\r\n");
+}
+
 static const ShellCommand commands[] = {
     {"reboot", cmd_reboot},
     {"dfu", cmd_dfu},
@@ -900,6 +1039,12 @@ static const ShellCommand commands[] = {
     {"accessibility_readcurr", cmd_accessibility_readcurr},
     {"applist", cmd_applist},
     {"appstart", cmd_appstart},
+    {"gotgps", cmd_gotgps},
+    {"gotorientation", cmd_gotorientation},
+    {"sysinfo", cmd_sysinfo},
+    {"radioinfo", cmd_radioinfo},
+    {"pmemreset", cmd_pmemreset},
+    {"settingsreset", cmd_settingsreset},
     {NULL, NULL}};
 
 static const ShellConfig shell_cfg1 = {
