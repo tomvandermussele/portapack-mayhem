@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2014 Jared Boone, ShareBrained Technology, Inc.
- * Copyright (C) 2016 Furrtek
+ * Copyright 2024 Tamas Eisenberger <e.tamas@iwstudio.hu>
  *
  * This file is part of PortaPack.
  *
@@ -20,39 +19,22 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef __AUDIO_DMA_H__
-#define __AUDIO_DMA_H__
+#ifndef __VIEW_FACTORY_BASE_HPP__
+#define __VIEW_FACTORY_BASE_HPP__
 
-#include <cstdint>
+#include <memory>
+#include "ui_widget.hpp"
 
-#include "buffer.hpp"
+namespace ui {
 
-namespace audio {
+class NavigationView;
 
-struct sample_t {
-    union {
-        struct {
-            int16_t left;
-            int16_t right;
-        };
-        uint32_t raw;
-    };
+class ViewFactoryBase {
+   public:
+    virtual ~ViewFactoryBase();
+    virtual std::unique_ptr<View> produce(NavigationView& nav) const = 0;
 };
 
-using buffer_t = buffer_t<sample_t>;
+}  // namespace ui
 
-namespace dma {
-
-void init();
-void configure();
-void enable();
-void disable();
-void shrink_tx_buffer(bool shrink);
-
-audio::buffer_t tx_empty_buffer();
-audio::buffer_t rx_empty_buffer();
-
-} /* namespace dma */
-} /* namespace audio */
-
-#endif /*__AUDIO_DMA_H__*/
+#endif  //__VIEW_FACTORY_BASE_HPP__

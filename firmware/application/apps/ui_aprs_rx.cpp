@@ -101,6 +101,8 @@ APRSRxView::APRSRxView(NavigationView& nav, Rect parent_rect)
             field_frequency.set_value(145175000);
         } else if (i == 3) {
             field_frequency.set_value(144575000);
+        } else if (i == 4) {
+            field_frequency.set_value(145825000);
         }
     };
 
@@ -258,7 +260,7 @@ void APRSTableView::on_pkt(const APRSPacketMessage* message) {
     std::string source_formatted = packet.get_source_formatted();
     std::string info_string = packet.get_stream_text();
 
-    rtcGetTime(&RTCD1, &datetime);
+    rtc_time::now(datetime);
     auto& entry = ::on_packet(recent, packet.get_source());
     entry.reset_age();
     entry.inc_hit();

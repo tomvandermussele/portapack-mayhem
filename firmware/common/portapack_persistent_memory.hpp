@@ -32,6 +32,7 @@
 #include "modems.hpp"
 #include "serializer.hpp"
 #include "volume.hpp"
+#include "config_mode.hpp"
 
 // persistent memory from/to sdcard flag file
 #define PMEM_FILEFLAG u"/SETTINGS/PMEM_FILEFLAG"
@@ -115,6 +116,21 @@ enum encoder_dial_sensitivity {
     DIAL_SENSITIVITY_HIGH = 2,
     NUM_DIAL_SENSITIVITY
 };
+
+typedef union {
+    uint32_t v;
+    struct {
+        uint8_t start_which : 4;
+        uint8_t start_weekday : 4;
+        uint8_t start_month : 4;
+        uint8_t end_which : 4;
+        uint8_t end_weekday : 4;
+        uint8_t end_month : 4;
+        uint8_t UNUSED : 7;
+        uint8_t dst_enabled : 1;
+    } b;
+} dst_config_t;
+static_assert(sizeof(dst_config_t) == sizeof(uint32_t));
 
 namespace cache {
 
@@ -227,8 +243,6 @@ void set_disable_touchscreen(bool v);
 uint8_t config_encoder_dial_sensitivity();
 void set_encoder_dial_sensitivity(uint8_t v);
 
-#define CONFIG_MODE_GUARD_VALUE 0x000007d1
-#define CONFIG_MODE_NORMAL_VALUE 0x000007cf
 uint32_t config_mode_storage_direct();
 void set_config_mode_storage_direct(uint32_t v);
 bool config_disable_config_mode_direct();
@@ -241,8 +255,13 @@ void set_pocsag_ignore_address(uint32_t address);
 
 bool clkout_enabled();
 void set_clkout_enabled(bool v);
-uint16_t clkout_freq();
 void set_clkout_freq(uint16_t freq);
+
+bool dst_enabled();
+void set_dst_enabled(bool v);
+uint16_t clkout_freq();
+dst_config_t config_dst();
+void set_config_dst(dst_config_t v);
 
 /* Recon app */
 bool recon_autosave_freqs();

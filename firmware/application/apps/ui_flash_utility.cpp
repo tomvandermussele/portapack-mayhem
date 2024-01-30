@@ -21,6 +21,7 @@
  */
 
 #include "ui_flash_utility.hpp"
+#include "ui_styles.hpp"
 #include "portapack_shared_memory.hpp"
 
 namespace ui {
@@ -29,6 +30,30 @@ static const char16_t* firmware_folder = u"/FIRMWARE";
 
 Thread* FlashUtilityView::thread{nullptr};
 static constexpr size_t max_filename_length = 26;
+
+bool valid_firmware_file(std::filesystem::path::string_type path) {
+    File firmware_file;
+    uint32_t read_buffer[128];
+    uint32_t checksum{(uint32_t)~FLASH_EXPECTED_CHECKSUM};  // initializing to invalid checksum in case file can't be read
+
+    // test read of the whole file just to validate checksum (baseband flash code will re-read when flashing)
+    auto result = firmware_file.open(path.c_str());
+    if (!result.is_valid()) {
+        checksum = 0;
+        for (uint32_t i = 0; i < FLASH_ROM_SIZE / sizeof(read_buffer); i++) {
+            auto readResult = firmware_file.read(&read_buffer, sizeof(read_buffer));
+
+            // if file is smaller than 1MB, assume it's a downgrade to an old FW version and ignore the checksum
+            if ((!readResult) || (readResult.value() != sizeof(read_buffer))) {
+                checksum = FLASH_EXPECTED_CHECKSUM;
+                break;
+            }
+
+            checksum += simple_checksum((uint32_t)read_buffer, sizeof(read_buffer));
+        }
+    }
+    return (checksum == FLASH_EXPECTED_CHECKSUM);
+}
 
 FlashUtilityView::FlashUtilityView(NavigationView& nav)
     : nav_(nav) {
@@ -85,9 +110,8 @@ bool FlashUtilityView::endsWith(const std::u16string& str, const std::u16string&
     }
 }
 
-std::filesystem::path FlashUtilityView::extract_tar(std::filesystem::path::string_type path) {
+std::filesystem::path FlashUtilityView::extract_tar(std::filesystem::path::string_type path, ui::Painter& painter) {
     //
-    ui::Painter painter;
     painter.fill_rectangle(
         {0, 0, portapack::display.width(), portapack::display.height()},
         ui::Color::black());
@@ -98,22 +122,22 @@ std::filesystem::path FlashUtilityView::extract_tar(std::filesystem::path::strin
         painter.fill_rectangle({0, 50, portapack::display.width(), 90}, ui::Color::black());
         painter.draw_string({0, 60}, this->nav_.style(), fileName);
     });
-    if (res.string().empty()) {
-        ui::Painter painter;
-        painter.fill_rectangle({0, 50, portapack::display.width(), 90}, ui::Color::black());
-        painter.draw_string({0, 60}, this->nav_.style(), "BAD TAR FILE");
-        chThdSleepMilliseconds(5000);
-    }
     return res;
 }
 
-void FlashUtilityView::flash_firmware(std::filesystem::path::string_type path) {
+bool FlashUtilityView::flash_firmware(std::filesystem::path::string_type path) {
+    ui::Painter painter;
     if (endsWith(path, u".tar")) {
         // extract, then update
-        path = extract_tar(u'/' + path).native();
-        if (path.empty()) return;
+        path = extract_tar(u'/' + path, painter).native();
     }
-    ui::Painter painter;
+
+    if (path.empty() || !valid_firmware_file(path.c_str())) {
+        painter.fill_rectangle({0, 50, portapack::display.width(), 90}, ui::Color::black());
+        painter.draw_string({0, 60}, Styles::red, "BAD FIRMWARE FILE");
+        chThdSleepMilliseconds(5000);
+        return false;
+    }
     painter.fill_rectangle(
         {0, 0, portapack::display.width(), portapack::display.height()},
         ui::Color::black());
@@ -126,6 +150,7 @@ void FlashUtilityView::flash_firmware(std::filesystem::path::string_type path) {
     std::memcpy(&shared_memory.bb_data.data[0], path.c_str(), (path.length() + 1) * 2);
     m4_init(portapack::spi_flash::image_tag_flash_utility, portapack::memory::map::m4_code, false);
     m0_halt();
+    return true;  // fixes compiler warning (line should not be reached due to halt)
 }
 
 void FlashUtilityView::focus() {

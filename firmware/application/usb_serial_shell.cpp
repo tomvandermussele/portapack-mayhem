@@ -41,6 +41,7 @@
 #include "chprintf.h"
 #include "chqueues.h"
 #include "ui_external_items_menu_loader.hpp"
+#include "ui_flash_utility.hpp"
 #include "untar.hpp"
 #include "ui_widget.hpp"
 
@@ -151,39 +152,15 @@ static void cmd_flash(BaseSequentialStream* chp, int argc, char* argv[]) {
     if (!top_widget) return;
     auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
     if (!nav) return;
-    nav->display_modal("Flashing", "Flashing from serial.\r\nPlease wait!\r\nDevice will restart.");
-    // check file extensions
-    if (strEndsWith(path.native(), u".ppfw.tar")) {
-        // extract tar
-        chprintf(chp, "Extracting TAR file.\r\n");
-        auto res = UnTar::untar(
-            path.native(), [chp](const std::string fileName) {
-                chprintf(chp, fileName.c_str());
-                chprintf(chp, "\r\n");
-            });
-        if (res.empty()) {
-            chprintf(chp, "error bad TAR file.\r\n");
-            nav->pop();
-            return;
-        }
-        path = res;  // it will contain the last bin file in tar
-    } else if (strEndsWith(path.native(), u".bin")) {
-        // nothing to do for this case yet.
-    } else {
-        chprintf(chp, "error only .bin or .ppfw.tar files canbe flashed.\r\n");
-        nav->pop();
-        return;
-    }
+    nav->home(false);
 
-    chprintf(chp, "Flashing: ");
-    chprintf(chp, path.string().c_str());
-    chprintf(chp, "\r\n");
-    chThdSleepMilliseconds(50);
-    std::memcpy(&shared_memory.bb_data.data[0], path.native().c_str(), (path.native().length() + 1) * 2);
-    m4_request_shutdown();
-    chThdSleepMilliseconds(50);
-    m4_init(portapack::spi_flash::image_tag_flash_utility, portapack::memory::map::m4_code, false);
-    m0_halt();
+    // call nav with flash
+    auto open_view = nav->push<ui::FlashUtilityView>();
+    chprintf(chp, "Flashing started\r\n");
+    chThdSleepMilliseconds(150);  // to give display some time to paint the screen
+    if (!open_view->flash_firmware(path.native())) {
+        chprintf(chp, "error\r\n");
+    }
 }
 
 static void cmd_screenshot(BaseSequentialStream* chp, int argc, char* argv[]) {
@@ -404,7 +381,7 @@ static void cmd_rtcget(BaseSequentialStream* chp, int argc, char* argv[]) {
     (void)argv;
 
     rtc::RTC datetime;
-    rtcGetTime(&RTCD1, &datetime);
+    rtc_time::now(datetime);
 
     chprintf(chp, "Current time: %04d-%02d-%02d %02d:%02d:%02d\r\n", datetime.year(), datetime.month(), datetime.day(), datetime.hour(), datetime.minute(), datetime.second());
 }
@@ -420,11 +397,12 @@ static void cmd_rtcset(BaseSequentialStream* chp, int argc, char* argv[]) {
         return;
     }
 
+    // TODO: additional commands/parameters for DST?
     rtc::RTC new_datetime{
         (uint16_t)strtol(argv[0], NULL, 10), (uint8_t)strtol(argv[1], NULL, 10),
         (uint8_t)strtol(argv[2], NULL, 10), (uint32_t)strtol(argv[3], NULL, 10),
         (uint32_t)strtol(argv[4], NULL, 10), (uint32_t)strtol(argv[5], NULL, 10)};
-    rtcSetTime(&RTCD1, &new_datetime);
+    rtc_time::set(new_datetime);
 
     chprintf(chp, "ok\r\n");
 }
@@ -710,6 +688,30 @@ static void printAppInfo(BaseSequentialStream* chp, ui::AppInfoConsole& element)
     }
 }
 
+static void printAppInfo(BaseSequentialStream* chp, const ui::AppInfo& element) {
+    if (strlen(element.id) == 0) return;
+    chprintf(chp, element.id);
+    chprintf(chp, " ");
+    chprintf(chp, element.displayName);
+    chprintf(chp, " ");
+    switch (element.menuLocation) {
+        case RX:
+            chprintf(chp, "[RX]\r\n");
+            break;
+        case TX:
+            chprintf(chp, "[TX]\r\n");
+            break;
+        case UTILITIES:
+            chprintf(chp, "[UTIL]\r\n");
+            break;
+        case DEBUG:
+            chprintf(chp, "[DEBUG]\r\n");
+            break;
+        default:
+            break;
+    }
+}
+
 // returns the installed apps, those can be called by appstart APPNAME
 static void cmd_applist(BaseSequentialStream* chp, int argc, char* argv[]) {
     (void)argc;
@@ -720,8 +722,9 @@ static void cmd_applist(BaseSequentialStream* chp, int argc, char* argv[]) {
     if (!top_widget) return;
     auto nav = static_cast<ui::SystemView*>(top_widget)->get_navigation_view();
     if (!nav) return;
-    for (auto element : ui::NavigationView::fixedAppListFC) {
-        printAppInfo(chp, element);
+    // TODO(u-foka): Somehow order static and dynamic app lists together
+    for (auto& element : ui::NavigationView::appMap) {  // Use the map as its ordered by id
+        printAppInfo(chp, element.second);
     }
     ui::ExternalItemsMenuLoader::load_all_external_items_callback([chp](ui::AppInfoConsole& info) {
         printAppInfo(chp, info);
