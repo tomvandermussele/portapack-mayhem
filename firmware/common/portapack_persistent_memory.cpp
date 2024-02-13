@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2015 Jared Boone, ShareBrained Technology, Inc.
  * Copyright (C) 2016 Furrtek
+ * Copyright (C) 2024 Mark Thompson
  *
  * This file is part of PortaPack.
  *
@@ -32,7 +33,9 @@
 #include "string_format.hpp"
 #include "ui_styles.hpp"
 #include "ui_painter.hpp"
+#include "ui_flash_utility.hpp"
 #include "utility.hpp"
+#include "rtc_time.hpp"
 
 #include <algorithm>
 #include <string>
@@ -104,7 +107,7 @@ struct ui_config_t {
     bool hide_clock : 1;
     bool clock_show_date : 1;
     bool clkout_enabled : 1;
-    bool UNUSED_1 : 1;
+    bool apply_fake_brightness : 1;
     bool stealth_mode : 1;
     bool config_login : 1;
     bool config_splash : 1;
@@ -125,13 +128,13 @@ struct ui_config2_t {
     bool hide_sd_card : 1;
 
     bool hide_mute : 1;
+    bool hide_fake_brightness : 1;
     bool UNUSED_1 : 1;
     bool UNUSED_2 : 1;
     bool UNUSED_3 : 1;
     bool UNUSED_4 : 1;
     bool UNUSED_5 : 1;
     bool UNUSED_6 : 1;
-    bool UNUSED_7 : 1;
 
     uint8_t PLACEHOLDER_2;
     uint8_t PLACEHOLDER_3;
@@ -145,7 +148,7 @@ struct misc_config_t {
     bool disable_speaker : 1;
     bool config_disable_external_tcxo : 1;
     bool config_sdcard_high_speed_io : 1;
-    bool UNUSED_4 : 1;
+    bool config_disable_config_mode : 1;
     bool UNUSED_5 : 1;
     bool UNUSED_6 : 1;
     bool UNUSED_7 : 1;
@@ -155,6 +158,8 @@ struct misc_config_t {
     uint8_t PLACEHOLDER_3;
 };
 static_assert(sizeof(misc_config_t) == sizeof(uint32_t));
+
+#define MC_CONFIG_DISABLE_CONFIG_MODE 0x00000010  // config_disable_config_mode bit in struct above
 
 /* IMPORTANT: Update dump_persistent_memory (below) when changing data_t. */
 
@@ -219,7 +224,12 @@ struct data_t {
 
     // Rotary encoder dial sensitivity (encoder.cpp/hpp)
     uint16_t encoder_dial_sensitivity : 4;
-    uint16_t UNUSED_8 : 12;
+
+    // fake brightness level (not switch, switch is in another place)
+    uint16_t fake_brightness_level : 4;
+
+    // Encoder rotation rate multiplier for larger increments when rotated rapidly
+    uint16_t encoder_rate_multiplier : 8;
 
     // Headphone volume in centibels.
     int16_t headphone_volume_cb;
@@ -232,6 +242,9 @@ struct data_t {
 
     // recovery mode magic value storage
     uint32_t config_mode_storage;
+
+    // Daylight savings time
+    dst_config_t dst_config;
 
     constexpr data_t()
         : structure_version(data_structure_version_enum::VERSION_CURRENT),
@@ -281,11 +294,13 @@ struct data_t {
           frequency_tx_correction(0),
 
           encoder_dial_sensitivity(DIAL_SENSITIVITY_NORMAL),
-          UNUSED_8(0),
+          fake_brightness_level(BRIGHTNESS_50),
+          encoder_rate_multiplier(1),
           headphone_volume_cb(-600),
           misc_config(),
           ui_config2(),
-          config_mode_storage(CONFIG_MODE_NORMAL_VALUE) {
+          config_mode_storage(CONFIG_MODE_NORMAL_VALUE),
+          dst_config() {
     }
 };
 
@@ -386,6 +401,8 @@ namespace cache {
 void defaults() {
     cached_backup_ram = backup_ram_t();
 
+    // If the desired default is 0/false, then no need to set it here (buffer is initialized to 0)
+    // NB: This function is only called when pmem is reset; also see firmware upgrade handling below.
     set_config_backlight_timer(backlight_config_t{});
     set_config_splash(true);
     set_config_disable_external_tcxo(false);
@@ -416,8 +433,9 @@ void init() {
     const auto switches_state = get_switches_state();
 
     // ignore for valid check
-    auto config_mode_backup = config_mode_storage();
-    set_config_mode_storage(CONFIG_MODE_NORMAL_VALUE);
+    auto config_mode_backup = config_mode_storage_direct();
+    set_config_mode_storage_direct(CONFIG_MODE_NORMAL_VALUE);
+
     if (!(switches_state[(size_t)ui::KeyEvent::Left] && switches_state[(size_t)ui::KeyEvent::Right]) && backup_ram->is_valid()) {
         // Copy valid persistent data into cache.
         cached_backup_ram = *backup_ram;
@@ -433,7 +451,11 @@ void init() {
         // Copy defaults into cache.
         defaults();
     }
-    set_config_mode_storage(config_mode_backup);
+    set_config_mode_storage_direct(config_mode_backup);
+
+    // Firmware upgrade handling - adjust newly defined fields where 0 is an invalid default
+    if (fake_brightness_level() == 0) set_fake_brightness_level(BRIGHTNESS_50);
+    if (encoder_rate_multiplier() == 0) set_encoder_rate_multiplier(1);
 }
 
 void persist() {
@@ -597,12 +619,20 @@ bool config_disable_external_tcxo() {
     return data->misc_config.config_disable_external_tcxo;
 }
 
+bool config_disable_config_mode() {
+    return data->misc_config.config_disable_config_mode;
+}
+
 bool config_sdcard_high_speed_io() {
     return data->misc_config.config_sdcard_high_speed_io;
 }
 
 bool stealth_mode() {
     return data->ui_config.stealth_mode;
+}
+
+bool apply_fake_brightness() {
+    return data->ui_config.apply_fake_brightness;
 }
 
 bool config_login() {
@@ -666,6 +696,10 @@ void set_config_disable_external_tcxo(bool v) {
     data->misc_config.config_disable_external_tcxo = v;
 }
 
+void set_config_disable_config_mode(bool v) {
+    data->misc_config.config_disable_config_mode = v;
+}
+
 void set_config_sdcard_high_speed_io(bool v, bool save) {
     if (v) {
         /* 200MHz / (2 * 2) = 50MHz */
@@ -698,6 +732,10 @@ void set_config_cpld(uint8_t i) {
 void set_config_backlight_timer(const backlight_config_t& new_value) {
     data->ui_config.backlight_timeout = static_cast<uint8_t>(new_value.timeout_enum());
     data->ui_config.enable_backlight_timeout = static_cast<uint8_t>(new_value.timeout_enabled());
+}
+
+void set_apply_fake_brightness(const bool v) {
+    data->ui_config.apply_fake_brightness = v;
 }
 
 uint32_t pocsag_last_address() {
@@ -856,6 +894,9 @@ bool ui_hide_clock() {
 bool ui_hide_sd_card() {
     return data->ui_config2.hide_sd_card;
 }
+bool ui_hide_fake_brightness() {
+    return data->ui_config2.hide_fake_brightness;
+}
 
 void set_ui_hide_speaker(bool v) {
     data->ui_config2.hide_speaker = v;
@@ -885,6 +926,9 @@ void set_ui_hide_clock(bool v) {
 }
 void set_ui_hide_sd_card(bool v) {
     data->ui_config2.hide_sd_card = v;
+}
+void set_ui_hide_fake_brightness(bool v) {
+    data->ui_config2.hide_fake_brightness = v;
 }
 
 /* Converter */
@@ -936,22 +980,69 @@ void set_config_freq_rx_correction(uint32_t v) {
 }
 
 // Rotary encoder dial settings
-
-uint8_t config_encoder_dial_sensitivity() {
+uint8_t encoder_dial_sensitivity() {
     return data->encoder_dial_sensitivity;
 }
 void set_encoder_dial_sensitivity(uint8_t v) {
     data->encoder_dial_sensitivity = v;
 }
+uint8_t encoder_rate_multiplier() {
+    return data->encoder_rate_multiplier;
+}
+void set_encoder_rate_multiplier(uint8_t v) {
+    data->encoder_rate_multiplier = v;
+}
 
 // Recovery mode magic value storage
 static data_t* data_direct_access = reinterpret_cast<data_t*>(memory::map::backup_ram.base());
 
-uint32_t config_mode_storage() {
+uint32_t config_mode_storage_direct() {
     return data_direct_access->config_mode_storage;
 }
-void set_config_mode_storage(uint32_t v) {
+void set_config_mode_storage_direct(uint32_t v) {
     data_direct_access->config_mode_storage = v;
+}
+bool config_disable_config_mode_direct() {
+    // "return data_direct_access->misc_config.config_disable_config_mode"
+    // Casting as U32 as workaround for misaligned memory access
+    uint32_t misc_config_u32 = *(uint32_t*)&data_direct_access->misc_config;
+    return ((misc_config_u32 & MC_CONFIG_DISABLE_CONFIG_MODE) != 0);
+}
+
+// Daylight savings time
+bool dst_enabled() {
+    return data->dst_config.b.dst_enabled;
+}
+void set_dst_enabled(bool v) {
+    data->dst_config.b.dst_enabled = v;
+    rtc_time::dst_init();
+}
+dst_config_t config_dst() {
+    return data->dst_config;
+}
+void set_config_dst(dst_config_t v) {
+    data->dst_config = v;
+    rtc_time::dst_init();
+}
+
+// Fake brightness level (switch is in another place)
+uint8_t fake_brightness_level() {
+    return data->fake_brightness_level;
+}
+void set_fake_brightness_level(uint8_t v) {
+    data->fake_brightness_level = v;
+}
+
+// Cycle through 4 brightness options: disabled -> enabled/50% -> enabled/25% -> enabled/12.5% -> disabled
+void toggle_fake_brightness_level() {
+    bool fbe = apply_fake_brightness();
+
+    if ((!fbe) || (data->fake_brightness_level >= BRIGHTNESS_12p5)) {
+        set_apply_fake_brightness(!fbe);
+        data->fake_brightness_level = BRIGHTNESS_50;
+    } else {
+        data->fake_brightness_level++;
+    }
 }
 
 // PMem to sdcard settings
@@ -963,7 +1054,7 @@ bool should_use_sdcard_for_pmem() {
 int save_persistent_settings_to_file() {
     File outfile;
 
-    make_new_directory(SETTINGS_DIR);
+    ensure_directory(SETTINGS_DIR);
     auto error = outfile.create(PMEM_SETTING_FILE);
     if (error)
         return false;
@@ -996,7 +1087,7 @@ bool debug_dump() {
     std::filesystem::path filename{};
     File pmem_dump_file{};
     // create new dump file name and DEBUG directory
-    make_new_directory(debug_dir);
+    ensure_directory(debug_dir);
     filename = next_filename_matching_pattern(debug_dir + "/DEBUG_DUMP_????.TXT");
     if (filename.empty()) {
         painter.draw_string({0, 320 - 16}, ui::Styles::red, "COULD NOT GET DUMP NAME !");
@@ -1011,6 +1102,9 @@ bool debug_dump() {
     pmem_dump_file.write_line("FW version: " VERSION_STRING);
     pmem_dump_file.write_line("Ext APPS version req'd: 0x" + to_string_hex(VERSION_MD5));
     pmem_dump_file.write_line("GCC version: " + to_string_dec_int(__GNUC__) + "." + to_string_dec_int(__GNUC_MINOR__) + "." + to_string_dec_int(__GNUC_PATCHLEVEL__));
+
+    // firmware checksum
+    pmem_dump_file.write_line("Firmware calculated checksum: 0x" + to_string_hex(simple_checksum(FLASH_STARTING_ADDRESS, FLASH_ROM_SIZE), 8));
 
     // write persistent memory
     pmem_dump_file.write_line("\n[Persistent Memory]");
@@ -1037,9 +1131,9 @@ bool debug_dump() {
     pmem_dump_file.write_line("tone_mix: " + to_string_dec_uint(data->tone_mix));
     pmem_dump_file.write_line("hardware_config: " + to_string_dec_uint(data->hardware_config));
     pmem_dump_file.write_line("recon_config: 0x" + to_string_hex(data->recon_config, 16));
-    pmem_dump_file.write_line("recon_repeat_nb: " + to_string_dec_int(data->recon_repeat_nb, 16));
-    pmem_dump_file.write_line("recon_repeat_gain:" + to_string_hex(data->recon_config, 16));
-    pmem_dump_file.write_line("recon_repeat_delay:" + to_string_hex(data->recon_config, 16));
+    pmem_dump_file.write_line("recon_repeat_nb: " + to_string_dec_int(data->recon_repeat_nb));
+    pmem_dump_file.write_line("recon_repeat_gain: " + to_string_dec_int(data->recon_repeat_gain));
+    pmem_dump_file.write_line("recon_repeat_delay: " + to_string_dec_int(data->recon_repeat_delay));
     pmem_dump_file.write_line("converter: " + to_string_dec_int(data->converter));
     pmem_dump_file.write_line("updown_converter: " + to_string_dec_int(data->updown_converter));
     pmem_dump_file.write_line("updown_frequency_rx_correction: " + to_string_dec_int(data->updown_frequency_rx_correction));
@@ -1052,8 +1146,11 @@ bool debug_dump() {
     pmem_dump_file.write_line("frequency_rx_correction: " + to_string_dec_uint(data->frequency_rx_correction));
     pmem_dump_file.write_line("frequency_tx_correction: " + to_string_dec_uint(data->frequency_tx_correction));
     pmem_dump_file.write_line("encoder_dial_sensitivity: " + to_string_dec_uint(data->encoder_dial_sensitivity));
-    // pmem_dump_file.write_line("UNUSED_8: " + to_string_dec_uint(data->UNUSED_8));
+    pmem_dump_file.write_line("encoder_rate_multiplier: " + to_string_dec_uint(data->encoder_rate_multiplier));
     pmem_dump_file.write_line("headphone_volume_cb: " + to_string_dec_int(data->headphone_volume_cb));
+    pmem_dump_file.write_line("config_mode_storage: 0x" + to_string_hex(data->config_mode_storage, 8));
+    pmem_dump_file.write_line("dst_config: 0x" + to_string_hex((uint32_t)data->dst_config.v, 8));
+    pmem_dump_file.write_line("fake_brightness_level: " + to_string_dec_uint(data->fake_brightness_level));
 
     // ui_config bits
     const auto backlight_timer = portapack::persistent_memory::config_backlight_timer();
@@ -1068,6 +1165,7 @@ bool debug_dump() {
     pmem_dump_file.write_line("ui_config hide_clock: " + to_string_dec_uint(data->ui_config.hide_clock));
     pmem_dump_file.write_line("ui_config clock_with_date: " + to_string_dec_uint(data->ui_config.clock_show_date));
     pmem_dump_file.write_line("ui_config clkout_enabled: " + to_string_dec_uint(data->ui_config.clkout_enabled));
+    pmem_dump_file.write_line("ui_config apply_fake_brightness: " + to_string_dec_uint(data->ui_config.apply_fake_brightness));
     pmem_dump_file.write_line("ui_config stealth_mode: " + to_string_dec_uint(data->ui_config.stealth_mode));
     pmem_dump_file.write_line("ui_config config_login: " + to_string_dec_uint(data->ui_config.config_login));
     pmem_dump_file.write_line("ui_config config_splash: " + to_string_dec_uint(data->ui_config.config_splash));
@@ -1082,12 +1180,14 @@ bool debug_dump() {
     pmem_dump_file.write_line("ui_config2 hide_clock: " + to_string_dec_uint(data->ui_config2.hide_clock));
     pmem_dump_file.write_line("ui_config2 hide_sd_card: " + to_string_dec_uint(data->ui_config2.hide_sd_card));
     pmem_dump_file.write_line("ui_config2 hide_mute: " + to_string_dec_uint(data->ui_config2.hide_mute));
+    pmem_dump_file.write_line("ui_config2 hide_fake_brightness: " + to_string_dec_uint(data->ui_config2.hide_fake_brightness));
 
     // misc_config bits
     pmem_dump_file.write_line("misc_config config_audio_mute: " + to_string_dec_int(config_audio_mute()));
     pmem_dump_file.write_line("misc_config config_speaker_disable: " + to_string_dec_int(config_speaker_disable()));
-    pmem_dump_file.write_line("ui_config config_disable_external_tcxo: " + to_string_dec_uint(config_disable_external_tcxo()));
-    pmem_dump_file.write_line("ui_config config_sdcard_high_speed_io: " + to_string_dec_uint(config_sdcard_high_speed_io()));
+    pmem_dump_file.write_line("misc_config config_disable_external_tcxo: " + to_string_dec_uint(config_disable_external_tcxo()));
+    pmem_dump_file.write_line("misc_config config_sdcard_high_speed_io: " + to_string_dec_uint(config_sdcard_high_speed_io()));
+    pmem_dump_file.write_line("misc_config config_disable_config_mode: " + to_string_dec_uint(config_disable_config_mode()));
 
     // receiver_model
     pmem_dump_file.write_line("\n[Receiver Model]");

@@ -53,6 +53,8 @@ using asahi_kasei::ak4951::AK4951;
 
 namespace portapack {
 
+const char* init_error = nullptr;
+
 portapack::IO io{
     portapack::gpio_dir,
     portapack::gpio_lcd_rdx,
@@ -177,7 +179,7 @@ enum class PortaPackModel {
 static bool save_config(int8_t value) {
     persistent_memory::set_config_cpld(value);
     if (sd_card::status() == sd_card::Status::Mounted) {
-        make_new_directory("/hardware");
+        ensure_directory("/hardware");
         File file;
         auto sucess = file.create("/hardware/settings.txt");
         if (!sucess.is_valid()) {
@@ -389,7 +391,7 @@ static void shutdown_base() {
  * everything else = IRC
  */
 
-bool init() {
+init_status_t init() {
     set_idivc_base_clocks(cgu::CLK_SEL::IDIVC);
 
     i2c0.start(i2c_config_boot_clock);
@@ -411,6 +413,7 @@ bool init() {
 
     /* Cache some configuration data from persistent memory. */
     persistent_memory::cache::init();
+    rtc_time::dst_init();
     chThdSleepMilliseconds(10);
 
     clock_manager.init_clock_generator();
@@ -480,7 +483,7 @@ bool init() {
         chThdSleepMilliseconds(10);
         if (i2c0.transmit(0x12 /* ak4951 */, ak4951_init_command, 2, timeout) == false) {
             shutdown_base();
-            return false;
+            return init_status_t::INIT_NO_PORTAPACK;
         }
     }
 
@@ -505,12 +508,14 @@ bool init() {
         // Mode center (autodetect), up (R1) and down (R2,H2,H2+) will go into hackrf mode after failing CPLD update
         if (load_config() != 3 /* left */ && load_config() != 4 /* right */) {
             shutdown_base();
-            return false;
+            return init_status_t::INIT_PORTAPACK_CPLD_FAILED;
         }
     }
 
+    init_status_t return_code = init_status_t::INIT_SUCCESS;
+
     if (!hackrf::cpld::load_sram()) {
-        chSysHalt();
+        return_code = init_status_t::INIT_HACKRF_CPLD_FAILED;
     }
 
     chThdSleepMilliseconds(10);  // This delay seems to solve white noise audio issues
@@ -522,7 +527,7 @@ bool init() {
 
     audio::init(portapack_audio_codec());
 
-    return true;
+    return return_code;
 }
 
 void shutdown(const bool leave_screen_on) {
@@ -540,6 +545,10 @@ void shutdown(const bool leave_screen_on) {
     hackrf::cpld::init_from_eeprom();
 
     shutdown_base();
+}
+
+void setEventDispatcherToUSBSerial(EventDispatcher* evt) {
+    usb_serial.setEventDispatcher(evt);
 }
 
 } /* namespace portapack */

@@ -52,7 +52,7 @@ set(USE_LINK_GC yes)
 # Linker extra options here.
 set(USE_LDOPT)
 
-# Enable this if you want link time optimizations (LTO)
+# Enable this if you want link time optimizations (LTO) - this flag affects chibios only
 set(USE_LTO no)
 
 # If enabled, this option allows to compile the application in THUMB mode.
@@ -116,7 +116,7 @@ set(CSRC
 	usb_serial_cdc.c
 	usb_serial_descriptor.c
 	usb_serial_endpoints.c
-	usb_serial_io.c
+	usb_serial_device_to_host.c
 	${HACKRF_PATH}/firmware/common/usb.c
 	${HACKRF_PATH}/firmware/common/usb_queue.c
 	${HACKRF_PATH}/firmware/hackrf_usb/usb_device.c
@@ -203,9 +203,11 @@ set(CPPSRC
 	metadata_file.cpp
 	portapack.cpp
 	usb_serial_shell.cpp
+	usb_serial_shell_filesystem.cpp
 	usb_serial_event.cpp
 	usb_serial_thread.cpp
 	usb_serial.cpp
+	usb_serial_host_to_device.cpp
 	qrcodegen.cpp
 	radio.cpp
 	receiver_model.cpp
@@ -265,7 +267,7 @@ set(CPPSRC
 	apps/ble_tx_app.cpp
 	apps/capture_app.cpp
 	apps/ert_app.cpp
-	apps/gps_sim_app.cpp
+	# apps/gps_sim_app.cpp
 	# apps/lge_app.cpp
 	apps/pocsag_app.cpp
 	# apps/replay_app.cpp
@@ -291,7 +293,7 @@ set(CPPSRC
 	# apps/ui_jammer.cpp
     # apps/ui_keyfob.cpp
 	# apps/ui_lcr.cpp
-	apps/ui_level.cpp  
+	apps/ui_level.cpp
 	apps/ui_looking_glass_app.cpp
 	apps/ui_mictx.cpp
 	apps/ui_modemsetup.cpp
@@ -302,7 +304,7 @@ set(CPPSRC
 	apps/ui_pocsag_tx.cpp
 	apps/ui_rds.cpp
 	apps/ui_recon_settings.cpp
-	apps/ui_recon.cpp  
+	apps/ui_recon.cpp
 	apps/ui_remote.cpp
 	apps/ui_scanner.cpp
 	apps/ui_sd_over_usb.cpp
@@ -311,9 +313,9 @@ set(CPPSRC
 	apps/ui_settings.cpp
 	apps/ui_siggen.cpp
 	apps/ui_sonde.cpp
-	apps/ui_spectrum_painter_image.cpp
-	apps/ui_spectrum_painter_text.cpp
-	apps/ui_spectrum_painter.cpp
+	# apps/ui_spectrum_painter_image.cpp
+	# apps/ui_spectrum_painter_text.cpp
+	# apps/ui_spectrum_painter.cpp
 	apps/ui_ss_viewer.cpp
 	apps/ui_sstvtx.cpp
 	apps/ui_subghzd.cpp
@@ -344,6 +346,7 @@ set(CPPSRC
 	${CPLD_20170522_DATA_CPP}
 	${HACKRF_CPLD_DATA_CPP}
 	ui_external_items_menu_loader.cpp
+	view_factory_base.cpp
 
 	${EXTCPPSRC}
 )
@@ -489,6 +492,7 @@ add_custom_command(
 )
 
 add_executable(${PROJECT_NAME}.elf ${CSRC} ${CPPSRC} ${ASMSRC})
+set_source_files_properties(${EXTCPPSRC} PROPERTIES COMPILE_FLAGS -fno-lto)
 set_target_properties(${PROJECT_NAME}.elf PROPERTIES LINK_DEPENDS ${LDSCRIPT})
 add_definitions(${DEFS})
 include_directories(. ${INCDIR})
